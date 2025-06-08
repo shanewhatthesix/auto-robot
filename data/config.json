@@ -1,0 +1,7 @@
+{
+  "llm_config": {
+    "llm_type": "Gemini",
+    "api_key": "AIzaSyDxs7Bh5nFJQ-DSNuZ2hMqzudLD-qbnl5k",
+    "base_url": "https://sws-gemini.deno.dev/"
+  }
+}

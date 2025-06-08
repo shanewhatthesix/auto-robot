@@ -15,6 +15,7 @@ from sandbox import Sandbox
 from tools.file_tools import FileTools
 from tools.system_tools import SystemTools
 
+
 class AutonomousAgent(Agent):
     """
     自主工具Agent的实现。
@@ -80,15 +81,15 @@ class AutonomousAgent(Agent):
                     timeout = tool_params.get("timeout", 60)
                     if not command:
                         raise ValueError("execute_command 工具需要 'command' 参数。")
-
+                    
                     self.audit_logger.log_action(
                         action_type="tool_call",
                         description=f"通过沙箱执行CLI命令: {command}",
                         details={"tool_name": tool_name, "command": command, "timeout": timeout}
                     )
-
+                    
                     sandbox_result = self.sandbox.execute_command(command, timeout=timeout)
-
+                    
                     if sandbox_result["success"]:
                         result_output = (
                             f"命令执行成功 (返回码: {sandbox_result['returncode']}):\n"
@@ -123,9 +124,9 @@ class AutonomousAgent(Agent):
                         description=f"调用工具: {tool_name}",
                         details={"tool_name": tool_name, "tool_params": tool_params}
                     )
-
+                    
                     result = tool_func(**tool_params)
-
+                    
                     self.audit_logger.log_action(
                         action_type="tool_result",
                         description=f"工具 '{tool_name}' 执行成功",
@@ -159,40 +160,49 @@ class AutonomousAgent(Agent):
             )
             return error_msg
 
-# 模拟LLM类 (用于LLMDecisionEngine)
+# Mock LLM for testing purposes
 class MockLLM:
-    def generate(self, prompt: str):
-        # 这是一个非常简化的模拟，实际中会调用Qwen或其他LLM API
-        # 根据prompt内容，模拟LLM的工具调用或响应
-        if "文件" in prompt and "读取" in prompt:
-            # 尝试从prompt中提取路径，简化为固定值
-            return '{"type": "tool_call", "tool_name": "read_file", "tool_params": {"path": "README.md"}}'
-        elif "系统" in prompt and "状态" in prompt:
-            return '{"type": "tool_call", "tool_name": "get_system_info", "tool_params": {}}'
-        elif "列出" in prompt and "目录" in prompt:
-            return '{"type": "tool_call", "tool_name": "list_directory", "tool_params": {"path": "."}}'
+    def generate(self, prompt: str) -> str:
+        """
+        Mock LLM generates a predefined response or tool call based on prompt.
+        """
+        print(f"MockLLM received prompt: {prompt}")
+        # Simple logic to simulate tool call or response
+        if "读取文件" in prompt:
+            # Simulate a tool call for reading a file
+            file_path = prompt.split("读取文件")[1].strip()
+            return json.dumps({"type": "tool_call", "tool_call": {"function": {"name": "read_file", "arguments": json.dumps({"path": file_path})}}})
+        elif "列出目录" in prompt:
+             # Simulate a tool call for listing directory
+            dir_path = prompt.split("列出目录")[1].strip() if prompt.split("列出目录")[1].strip() else "."
+            return json.dumps({"type": "tool_call", "tool_call": {"function": {"name": "list_directory", "arguments": json.dumps({"path": dir_path})}}})
         elif "执行命令" in prompt:
-            # 假设用户明确要求执行某个命令
-            # 这是一个安全风险点，实际LLM应更智能地构造命令或拒绝危险命令
-            if "ls" in prompt or "dir" in prompt:
-                cmd = "ls -l" if os.name != "nt" else "dir"
-                return f'{{"type": "tool_call", "tool_name": "execute_command", "tool_params": {{"command": "{cmd}"}}}}'
-            else:
-                return '{"type": "response", "response": "LLM不确定如何安全地执行此命令。"}'
+             # Simulate a tool call for executing command
+            command = prompt.split("执行命令")[1].strip()
+            return json.dumps({"type": "tool_call", "tool_call": {"function": {"name": "execute_command", "arguments": json.dumps({"command": command})}}})
         else:
-            return f'{{"type": "response", "response": "LLM认为：我无法直接处理您的请求，请尝试更具体的任务。"}}'
+            # Default to a simple response
+            return json.dumps({"type": "response", "response": f"MockLLM received task: '{prompt}'. No specific tool call simulated."})
 
     def parse_llm_response(self, llm_output: str) -> Action:
         """
-        解析LLM的输出，将其转换为Action对象。
+        Parses the mock LLM output (JSON string) into an Action object.
         """
         try:
             data = json.loads(llm_output)
             if data.get("type") == "tool_call":
+                tool_call_data = data.get("tool_call", {}).get("function", {})
+                tool_name = tool_call_data.get("name")
+                tool_params_str = tool_call_data.get("arguments", "{}")
+                try:
+                    tool_params = json.loads(tool_params_str)
+                except json.JSONDecodeError:
+                    print(f"Warning: Tool arguments are not a valid JSON string: {tool_params_str}")
+                    tool_params = {}
                 return Action(
                     type="tool_call",
-                    tool_name=data.get("tool_name"),
-                    tool_params=data.get("tool_params")
+                    tool_name=tool_name,
+                    tool_params=tool_params
                 )
             elif data.get("type") == "response":
                 return Action(
@@ -200,37 +210,17 @@ class MockLLM:
                     response=data.get("response")
                 )
             else:
-                return Action(type="response", response=f"LLM返回了无法解析的格式: {llm_output}")
+                return Action(type="response", response=f"Mock LLM returned unparseable format: {llm_output}")
         except json.JSONDecodeError:
-            return Action(type="response", response=f"LLM返回了非JSON格式的响应: {llm_output}")
+            return Action(type="response", response=f"Mock LLM returned non-JSON response: {llm_output}")
 
-# 扩展LLMDecisionEngine以使用MockLLM的解析能力
-class ExtendedLLMDecisionEngine(LLMDecisionEngine):
-    def decide(self, task: str, available_tools: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Action:
-        print(f"LLM引擎开始决策任务: '{task}'")
-        # 构建prompt，包含可用工具信息
-        tool_descriptions = []
-        for tool_name, tool_func in available_tools.items():
-            try:
-                signature = self.llm_model.tool_registry.get_tool_signature(tool_name) # 假设LLM模型可以访问工具注册表
-                tool_descriptions.append(f"- {tool_name}: {tool_func.__doc__.strip() if tool_func.__doc__ else '无描述'} (参数: {signature})")
-            except Exception:
-                tool_descriptions.append(f"- {tool_name}: 无描述 (参数未知)")
-
-        prompt = (
-            f"你是一个能够使用工具的智能Agent。你的任务是根据用户请求，决定是调用一个工具还是直接给出响应。\n"
-            f"当前任务: '{task}'\n"
-            f"可用工具:\n{'\n'.join(tool_descriptions)}\n\n"
-            f"请以JSON格式返回你的决策。如果调用工具，格式为: "
-            f'{{"type": "tool_call", "tool_name": "工具名称", "tool_params": {{"参数1": "值1", "参数2": "值2"}}}}\n'
-            f"如果直接响应，格式为: "
-            f'{{"type": "response", "response": "你的响应内容"}}\n'
-            f"请确保工具名称和参数与可用工具完全匹配。"
-        )
-        print(f"LLM Prompt:\n{prompt}")
-
-        llm_raw_output = self.llm_model.generate(prompt)
-        print(f"LLM原始输出: {llm_raw_output}")
+# LLM Decision Engine using the MockLLM
+class MockLLMDecisionEngine(LLMDecisionEngine):
+     def decide(self, task: str, available_tools: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Action:
+        print(f"Mock LLM engine deciding task: '{task}'")
+        # The MockLLM's generate method handles the logic based on the prompt
+        llm_raw_output = self.llm_model.generate(task)
+        print(f"Mock LLM raw output: {llm_raw_output}")
         return self.llm_model.parse_llm_response(llm_raw_output)
 
 
@@ -250,9 +240,8 @@ def setup_agent() -> AutonomousAgent:
     tool_registry.register_class_tools(SystemTools)
 
     # 3. 初始化决策引擎
-    # 模拟LLM，并让其可以访问工具注册表以获取工具签名
+    # 使用MockLLM代替Qwen
     mock_llm_instance = MockLLM()
-    mock_llm_instance.tool_registry = tool_registry # 注入tool_registry
 
     rule_engine = RuleBasedDecisionEngine()
     # 添加文件操作规则
@@ -310,7 +299,7 @@ def setup_agent() -> AutonomousAgent:
         params_extractor=lambda t: {"command": t.split("执行命令")[1].strip()}
     )
 
-    llm_engine = ExtendedLLMDecisionEngine(mock_llm_instance)
+    llm_engine = MockLLMDecisionEngine(mock_llm_instance)
     hybrid_decision_engine = HybridDecisionEngine(rule_engine, llm_engine)
 
     # 4. 创建Agent实例
@@ -340,7 +329,7 @@ def main():
         if user_task.lower() in ["退出", "exit"]:
             print("Agent 已退出。")
             break
-
+        
         result = agent.run(user_task)
         print(f"\nAgent 最终结果:\n{result}")
 
