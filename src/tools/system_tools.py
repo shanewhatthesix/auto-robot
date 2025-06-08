@@ -66,6 +66,16 @@ class SystemTools:
         return processes
 
     @staticmethod
+    def get_current_time() -> str:
+        """
+        获取当前日期和时间。
+        :return: 当前日期和时间的字符串表示
+        """
+        from datetime import datetime
+        print("正在获取当前时间...")
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
     def execute_command(command: str, timeout: int = 60) -> Dict[str, Any]:
         """
         执行一个CLI命令并返回其输出。

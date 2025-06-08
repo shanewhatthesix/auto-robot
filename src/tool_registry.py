@@ -21,6 +21,7 @@ class ToolRegistry:
         # 确保 _tools 只在第一次初始化时设置类型
         if not hasattr(self, '_initialized'):
             self._tools: Dict[str, Callable] = {}
+            self._tool_instances: Dict[str, Any] = {} # 新增：存储工具类的实例
             self._initialized = True
 
     def register_tool(self, tool_name: str, tool_func: Callable):
@@ -64,6 +65,12 @@ class ToolRegistry:
         signature = inspect.signature(tool_func)
         params_info = {}
         for name, param in signature.parameters.items():
+            # 忽略实例方法的 'self' 参数
+            # inspect.ismethod(tool_func) 检查 tool_func 是否是一个绑定方法
+            # 对于通过 getattr(instance, name) 获取的实例方法，它会返回 True
+            if name == 'self' and inspect.ismethod(tool_func):
+                continue
+            # 对于类方法和静态方法，它们没有 'self' 参数，所以不需要特殊处理
             param_type = str(param.annotation) if param.annotation != inspect.Parameter.empty else "Any"
             params_info[name] = {
                 "type": param_type,
@@ -77,30 +84,21 @@ class ToolRegistry:
         如果方法名以'_'开头，则不注册。
         :param tool_class: 包含工具方法的类
         """
-        print(f"正在注册类 '{tool_class.__name__}' 中的工具...")
-        for name in dir(tool_class):
-            if name.startswith('_'):
-                continue
-            attr = getattr(tool_class, name)
-            # 检查是否是可调用的方法（排除类属性）
-            if inspect.isfunction(attr) or inspect.ismethod(attr):
-                # 对于实例方法，需要绑定到实例
-                if inspect.ismethod(attr) and not inspect.isbuiltin(attr): # 排除内置方法
-                    # 如果是普通方法，需要一个实例来调用
-                    # 这里我们假设工具类的方法都是静态方法或类方法，或者在Agent中通过实例调用
-                    # 为了简化，我们只注册静态方法或类方法，或者直接注册函数
-                    # 如果是普通方法，需要确保它能被正确调用，这里暂时不处理实例方法
-                    # 更好的做法是让Agent持有工具类的实例
-                    pass
-                else:
+        # 如果传入的是类，则创建实例并存储
+        if inspect.isclass(tool_class):
+            instance = tool_class()
+            self._tool_instances[tool_class.__name__] = instance
+            print(f"正在注册类 '{tool_class.__name__}' 中的工具...")
+            for name in dir(tool_class):
+                if name.startswith('_'):
+                    continue
+                attr = getattr(instance, name) # 从实例获取方法
+                # 检查是否是方法或函数（包括静态方法）
+                if inspect.ismethod(attr) or inspect.isfunction(attr):
                     self.register_tool(name, attr)
-            elif inspect.isclass(attr):
-                # 忽略嵌套类
-                pass
-            else:
-                # 忽略其他属性
-                pass
-        print(f"类 '{tool_class.__name__}' 中的工具注册完成。")
+            print(f"类 '{tool_class.__name__}' 中的工具注册完成。")
+        else:
+            raise TypeError(f"register_class_tools 期望一个类，但接收到: {type(tool_class)}")
 
 
 if __name__ == "__main__":
